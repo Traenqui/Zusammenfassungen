@@ -46,19 +46,26 @@
     date: date,
   )
 
-  let font-default = (font: "Calibri", lang: language, region: "ch", size: font-size)
+  let font-default = (
+    font: ("Liberation Sans", "Calibri"),
+    lang: language,
+    region: "ch",
+    size: font-size,
+  )
 
   let font-special = (
     ..font-default,
-    font: "JetBrains Mono",
+    font: ("JetBrainsMono NF", "JetBrains Mono", "JetBrains Mono NL"),
     weight: "bold",
     fill: colors.hellblau,
   )
 
   let footer = context [
     #set text(font: font-special.font, size: 0.9em)
-    #let separator = if (authors.len() > 2) { ", " } else { " & " } 
-    #fach | #semester | #authors.join(separator)
+    // Normalize authors to a list to avoid errors when a single string is passed
+    #let authors_list = if (type(authors) == str) { (authors,) } else { authors }
+    #let separator = if (authors_list.len() > 2) { ", " } else { " & " }
+    #fach | #semester | #if (authors_list.len() == 0) { "" } else { authors_list.join(separator) }
     #h(1fr)
     #languages.at(language).page #counter(page).display()
   ]
@@ -122,7 +129,7 @@
   show table.cell.where(y: 0): emph
 
   // Unordered list, use with "- " or #list[]
-  show list: set list(marker: "–", body-indent: 0.45em)
+  show list: set list(marker: "-", body-indent: 0.45em)
 
   // "Important" template, use with "_text_" or #emph[]
   show emph: set text(fill: font-special.fill, weight: font-special.weight)
@@ -211,7 +218,7 @@
 // "Zusätzlicher Hinweis"-Vorlage
 #let hinweis(style: "italic", t) = {
   set text(style: style, size: 0.8em)
-  show raw: set text(font: "JetBrains Mono", size: 1.05em)
+  show raw: set text(font: "JetBrainsMono NF", size: 1.05em)
   t
 }
 
