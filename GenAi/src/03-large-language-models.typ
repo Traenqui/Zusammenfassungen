@@ -1,3 +1,4 @@
+#import "../../template_zusammenf.typ": *
 
 = LLMs (Large Language Models)
 
@@ -6,80 +7,102 @@
 
 *Pipeline:* Text → Tokens → Token IDs → Embeddings
 
-*Tokenization Levels:*
-- Character-level: small vocabulary, long sequences
-- Word-level: large vocabulary, unknown-word problem
-- Subword-level (BPE, WordPiece, Unigram): splits words into frequent subwords, avoids OOV issues
+*Tokenization levels:*
+- Character-level: small vocab, long sequences
+- Word-level: large vocab, OOV/unknown-word problem
+- Subword-level (BPE, WordPiece, Unigram): frequent subwords, avoids OOV, good tradeoff
 
-*Special Tokens:* `<BOS>`/`<EOS>` mark boundaries, `<PAD>` enables batching, `<UNK>` for unknown tokens.
+*Special tokens:* `<BOS>`/`<EOS>` boundaries, `<PAD>` batching, `<UNK>` unknown.
 
-*Why it matters:* Determines sequence length, vocabulary size, memory usage, and model behavior.
+*Why it matters:* controls sequence length, vocab size, memory/compute, and behavior.
 
-== Decoder Architecture
-*Decoder:* Uses masked self-attention so each token can only attend to previous tokens, enforcing causality during generation.
+== Decoder-only Transformer (causal LM)
+A *decoder-only* Transformer predicts the next token given previous ones:
+- Training objective (autoregressive):
+  $ L = - sum_(t=1)^T log p_theta(x_t | x_<t) $
+- Uses *causal masking* so token $t$ cannot attend to future tokens $> t$.
 
-*Autoregressive Generation:* Text generated one token at a time, each predicted token fed back as input.
-
-*Next-Word Prediction:* Model predicts probability distribution over vocabulary for next token, trained using cross-entropy (negative log-likelihood).
-
-*LM Head:* Final linear layer mapping decoder hidden states to vocabulary logits, converted to probabilities via softmax.
-
-== KV Cache
-Stores past Keys and Values to avoid recomputing attention during autoregressive decoding.
-
-Cache per layer:
-$ K_(1:t) = [K_1; dots; K_t], quad V_(1:t) = [V_1; dots; V_t] $
-
-At step $t+1$, compute only $K_(t+1), V_(t+1)$ and reuse cache:
-$ y_t = "softmax"((Q_t K_(1:t)^T) / sqrt(d_k)) V_(1:t) $
-
-*Benefit:* faster inference; *Cost:* extra memory
+#hinweis[
+Decoder-only ≠ “has no attention”: it uses self-attention, but *masked* (causal).
+]
 
 == Training vs Inference
+*Training (teacher forcing):*
+- Model sees full prefix for each position (masked) and predicts all next tokens in parallel.
+- Loss is summed/averaged over sequence positions.
 
-*Training:* Uses teacher forcing - model sees full input sequence and predicts next token at every position in parallel. LM head outputs logits for all tokens, loss (cross-entropy) computed over entire sequence.
+*Inference (generation):*
+- Generate token-by-token:
+  - start with prompt
+  - repeatedly sample next token from $p_theta(· | x_<t)$ and append
+- Cannot parallelize across time steps (depends on previous outputs).
 
-*Inference (Generation):* Text generated step by step - only last hidden state passed through LM head to predict next token. Predicted token appended to input and process repeated autoregressively.
+== KV Cache (fast inference)
+During generation, self-attention reuses past keys/values:
+- Without cache: recompute attention over all previous tokens each step.
+- With *KV cache*: store $K_{1..t}, V_{1..t}$ and only compute new $K_t, V_t$.
 
-== Encoder-Only (BERT, DistilBERT)
+Effect:
+- Much faster decoding for long contexts
+- Memory grows with sequence length ($"#tokens" times "#layers" times "#heads" times "head-dim"$)
 
-Uses bidirectional self-attention to produce contextual embeddings for each token (good for understanding, not generation).
+== Encoder-only models (BERT, DistilBERT)
 
-*BERT:* Pretrained with Masked Language Modeling (MLM) and Next Sentence Prediction (NSP).
-- MLM: mask tokens and predict them using left+right context
+Encoder-only Transformers use bidirectional self-attention to produce contextual embeddings for
+each token (good for understanding tasks, not autoregressive generation).
 
-*DistilBERT:* Smaller BERT trained via knowledge distillation (student mimics teacher). Reduces depth (~half layers) and uses distillation losses (incl. cosine loss aligning hidden states).
+_BERT (Bidirectional Encoder Representations from Transformers)_: pretrained with _Masked Language Modeling (MLM)_ and (in the original paper) _Next Sentence Prediction (NSP)_. MLM: mask
+tokens and predict them using left+right context.
+_DistilBERT_: a smaller BERT-like encoder trained via knowledge distillation (student mimics
+teacher). DistilBERT reduces depth (about half the layers) and uses distillation losses (incl. cosine
+loss aligning hidden states) during training.
 
-== Special Tokens
-- `<pad>` / [PAD]: padding for batching (ignored via attention_mask)
-- `<unk>` / [UNK]: unknown token
-- `<bos>` / `<s>`: begin of sequence
-- `<eos>` / `</s>`: end of sequence (stops generation)
-- [CLS]: sequence-level representation for classification (BERT)
-- [SEP]: separates segments/sentences (BERT)
-- [MASK]: masked LM pre-training target (BERT)
+== Decoding / Sampling Strategies
 
-== Transfer Learning
-Splits model into body and head. Head is task-specific final network layer. Only change LM Head to customize for your needs (body gets frozen).
+=== Greedy decoding
+Choose the most likely next token: $w_t = arg max_w P_t(w) $
 
-== Sampling Strategies
+Pros: deterministic, simple  
+Cons: can be repetitive / low diversity
 
-*Greedy Sampling:* Token with highest probability
-$ y_t = arg max_y P(y_t | y_(<t), x) $
+=== Temperature
+Control randomness by scaling logits:
+- Standard: $p = "softmax"(z / T)$
+- $T < 1$: sharper (more deterministic)
+- $T > 1$: flatter (more diverse)
 
-*Random Sampling:* Sample from probability distribution over full vocab
-$ P(y_t = w_i | y_(<t), x) = "softmax"(z_(i,t)) = (exp(z_(i,t)))/(sum_(j=1)^(|V|) exp(z_(i,j))) $
+$T = 1$ softmax unchanged, $T = 0$ argmax (greedy).
 
-*Temperature (T):* Controls output diversity by rescaling logits before softmax
-$ P(y_t = w_i | y_(<t), x) = (exp(z_(t,i) / T))/(sum_j exp(z_(t,j) / T)) $
-- $T < 1$: sharper distribution, low diversity
-- $T = 1$: normal softmax
-- $T > 1$: flatter distribution, higher diversity
+#hinweis[
+The probability-power form $P(w)^(1/T)$ is equivalent only when $P$ came from a softmax over logits.
+]
 
-*Beam Search:* Keeps top-k partial sequences at each step and prunes rest
+=== Top-k sampling
+Sample only from the $k$ most probable tokens:
+1. Take top-$k$ tokens by $P_t(w)$
+2. Renormalize within this set
+3. Sample
 
-*Top-k Sampling:* Keep k most probable tokens, renormalize, and sample. Controls diversity by limiting candidate set size.
+Pros: avoids very unlikely tokens  
+Cons: fixed $k$ can be too strict or too loose depending on step
 
-*Nucleus Sampling (Top-p):* Keep smallest set of tokens whose cumulative probability ≥ p, then sample. Adapts candidate set to model's confidence.
+=== Nucleus sampling (Top-p)
+Choose the smallest set whose cumulative probability mass reaches $p$.
+1. Sort tokens by probability:
+   $P_t(w_(1)) >= P_t(w_(2)) >= dots$
+2. Find smallest $K$ such that:
+   $sum_(i=1)^K P_t(w_(i)) >= p$
+3. Nucleus set:
+   $S_t = {w_(1), dots, w_(K)}$
+4. Renormalize within $S_t$ and sample
 
-*Difference:* Top-k uses fixed number of tokens; top-p uses fixed probability mass.
+Why nucleus may grow later:
+- Later-step distributions can be less peaked → need more tokens to reach the same cumulative mass
+
+=== Beam search
+Keep the top-$k$ partial sequences (beams) by cumulative log-probability:
+- expand each beam with candidate next tokens
+- keep best $k$ overall, prune the rest
+
+Pros: improves likelihood, common in seq2seq  
+Cons: less diverse, can over-prefer generic high-probability sequences

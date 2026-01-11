@@ -41,8 +41,7 @@ Instead of mapping $x$ → single latent point, map $x$ → *distribution* in la
 === Normal Distribution
 "Normalverteilt", represented as $N$, $mu$ → mean, $sigma^2$ → variance
 
-$ mu = (1/N) sum_(i=1)^N x_i $
-$ sigma^2 = (1/N) sum_(i=1)^N (x_i - mu)^2 $
+$ mu = (1/N) sum_(i=1)^N x_i ;  sigma^2 = (1/N) sum_(i=1)^N (x_i - mu)^2 $
 
 Standard deviation: $sigma = sqrt(sigma^2)$
 

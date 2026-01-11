@@ -1,165 +1,162 @@
+#import "../../template_zusammenf.typ": *
+#import "@preview/wrap-it:0.1.1": wrap-content
 
-= Diffusion
+= Diffusion Models
 
-Train network (DNN) to denoise images with different noise levels. In inference, begin with pure Gaussian noise and iteratively denoise → image matching training distribution.
+Train a DNN to *denoise* images at different noise levels.  
+*Inference:* start from *pure Gaussian noise* and iteratively denoise → sample from the training distribution.
 
-*Key difference vs VAE/GAN:* VAE/GAN generate in one forward pass; diffusion does many refinement steps (can "correct itself").
+*Key difference vs VAE/GAN:* VAE/GAN generate in *one forward pass*; diffusion does *many refinement steps* (can “self-correct”).
 
-Need two processes:
-1. Fixed forward diffusion process q
-2. Learned reverse denoising diffusion process $p_theta$
+*Two processes:*
+- Fixed forward noising: $q$
+- Learned reverse denoising: $p_theta$
 
-*Preprocessing:* normalize training images to 0 mean and unit variance
+*Preprocessing (common):* normalize training images to ~0 mean and ~unit variance.
 
-== Forward Diffusion q
-- Starting point: starting image $x_0$
-- Corrupt step by step over large number of steps T
-- Sample noise from Gaussian distribution at each time step and add it to x
-- T is large enough that image is indistinguishable from std Gaussian noise
-- Final image: $x_T$
+== 1. Forward diffusion (noising) $q$
+Goal: gradually corrupt clean data $x_0$ over $T$ steps until:
+$ x_T approx cal(N)(0, I) $
+(i.e., indistinguishable from standard Gaussian noise)
 
-=== One Step Noising
-Add small noise at each timestep $t=1..T$ with variance $beta_t$:
-- Sample: $epsilon ~ N(0,1)$
-- $x_t = sqrt(1 - beta_t) times x_(t-1) + sqrt(beta_t) times epsilon_(t-1)$
-- Scaling ensures: if $x_(t-1)$ has mean 0 and var 1, then $x_t$ also stays mean 0, var 1
+=== One-step noising
+For $t = 1..T$ with schedule $beta_t$:
+- Sample: $epsilon_(t-1) ~ cal(N)(0, I)$
+- Update:
+  $ x_t = sqrt(1 - beta_t) x_(t-1) + sqrt(beta_t) epsilon_(t-1) $
 
-=== Reparameterization
-Can sample $x_t$ at any arbitrary noise level conditioned on $x_0$ (sum of Gaussians is also Gaussian):
-- Define $alpha_t = 1 - beta_t$ and $bar(alpha)_t = product_(i=1)^t alpha_i$
-- Then sample directly from $x_0$: $x_t = sqrt(bar(alpha)_t) times x_0 + sqrt(1 - bar(alpha)_t) times epsilon$
-- *Benefit:* training can pick random t without simulating all intermediate steps
+Scaling keeps mean ~0 and var ~1 if $x_(t-1)$ is normalized.
 
-=== Diffusion Schedules
-$beta_t$ or equivalently $bar(alpha)_t$ are not constant and change with time. Schedule can be linear, quadratic, cosine etc.
+=== Reparameterization (sample any $t$ directly from $x_0$)
+Define:
+$ alpha_t = 1 - beta_t $  
+$ bar(alpha)_t = product_(i=1)^t alpha_i $
 
-*Linear:*
-- $beta_t$ increases linear (e.g., 0.0001 → 0.2)
-- Early: tiny noising steps → Late: larger steps (image already very noisy)
+Then:
+$ x_t = sqrt(bar(alpha)_t) x_0 + sqrt(1 - bar(alpha)_t) epsilon, quad epsilon ~ cal(N)(0, I) $
 
-*Cosine:*
-- Noise increases more gradually → often improves training efficiency and generation quality
-- $bar(alpha)_t = cos^2(t/T times pi/2)$
-- $x_t = cos(t/T times pi/2) times x_0 + sin(t/T times pi/2) times epsilon$
+*Benefit:* training can pick random $t$ without simulating all intermediate steps.
 
-== Reverse Diffusion
+=== Diffusion schedules
+Schedules define how $beta_t$ (or $bar(alpha)_t$) changes over time (linear/quadratic/cosine/...).
 
-=== Goal
-Want $p(x_(t-1) | x_t)$ (denoise), but true distribution is intractable. Learn approximation with neural network (parameters $theta$).
+#table(
+  columns: 2,
+  table.header[Linear schedule][Cosine schedule (common)],
+  [
+    - $beta_t$ increases linearly (e.g. 0.0001 -> 0.2)
+    - Early: tiny noising steps
+    - Late: larger steps (image already noisy)
+    - Example form:
+      $ beta_t = beta_"min" + (t - 1)/(T - 1) (beta_"max" - beta_"min") $
+  ],
+  [
+    - Noise increases more gradually → often better stability/quality
+    - One form:
+      $ bar(alpha)_t = cos^2(t/T pi/2) $
+      $ x_t = cos(t/T pi/2) x_0 + sin(t/T pi/2) epsilon $
+  ]
+)
 
-=== What the NN Predicts (DDPM Training Simplification)
-- Provide network with: noisy image $x_t$ + timestep (or schedule value)
-- Network predicts noise $epsilon_theta (x_t, t)$
-- Train with mean squared error: minimize $||epsilon - epsilon_theta (x_t, t)||^2$
+*Why Gaussian noise:* easy to sample, tractable math, known prior enables stable reverse denoising.
 
-== Training
-- Take random sample $x_0$ from real unknown data distribution $q(x_0)$
-- Sample noise level t where $t > 1 and t < T$ (random timestep)
-- Sample noise from Gaussian distribution $epsilon ~ N(0,1)$
-- Form $x_t$ using known schedule
-- Train NN to predict $epsilon$ from $(x_t, t)$ (SGD on batches)
+#hinweis("sum of Gaussians is also Gaussian")
 
-== U-Net
-U-Net is encoder-decoder CNN with skip connections.
+== Reverse diffusion (denoising) $p_theta$
+Goal: learn $p(x_(t-1) | x_t)$ (intractable exactly) using a neural network.
 
-*Architecture:*
-- *Encoder (downsampling):* Convolutions and pooling, extracts high-level global features
-- *Decoder (upsampling):* Transposed convolutions / upsampling, reconstructs image details
-- *Skip connections:* Copy encoder feature maps to decoder, preserve fine-grained spatial details
+=== DDPM simplification: predict noise
+Input: noisy sample $x_t$ + timestep $t$ (or noise-level embedding)  
+Predict: noise $epsilon_theta(x_t, t)$
 
-Helps DNN learn complex patterns and avoid vanishing gradient issues (provides highway for gradients to flow).
+Loss (MSE):
+$ min E[||epsilon - epsilon_theta(x_t, t)||^2] $
 
-*Timestep encoding:* Use sinusoidal embedding to map scalar timestep/noise-level to higher-dim vector (like Transformers):
-$ gamma(x) = (sin(2 pi e^0 f x), dots, sin(2 pi e^(L-1) f x), cos(2 pi e^0 f x), dots, cos(2 pi e^(L-1) f x)) $
+== Training loop (high level)
+1. Sample clean data: $x_0 ~ q(x_0)$
+2. Sample timestep: $t in {1, .., T}$ (often $1 < t < T$)
+3. Sample noise: $epsilon ~ cal(N)(0, I)$
+4. Create noisy input: $x_t$ using schedule (reparameterization)
+5. Update network (SGD) to predict $epsilon$ from $(x_t, t)$
 
-== Generation (Sampling)
-- Start with $x_T ~ N(0, I)$
-- For $t = T .. 1$:
-  - Predict noise (or mean)
-  - Compute $x_(t-1)$ (denoise one step)
-- Model predicts total noise component; iterative updates move from noisy → clean
+== Denoiser architecture: U-Net
+U-Net = encoder–decoder CNN with skip connections.
+- Encoder: downsample (conv + pooling) → global/context features
+- Decoder: upsample (transposed conv / upsampling) → reconstruct details
+- Skip connections: preserve spatial detail + improve gradient flow
 
-== Latent Diffusion / Stable Diffusion / Imagen
+*Timestep encoding:* embed scalar $t$ into a vector (often sinusoidal, transformer-style), e.g.
+$ gamma(t) = (sin(2 pi e^0 f t), ..., sin(2 pi e^(L-1) f t), cos(2 pi e^0 f t), ..., cos(2 pi e^(L-1) f t)) $
+
+== Sampling (generation)
+Start: $x_T ~ cal(N)(0, I)$  
+For $t = T, T-1, .., 1$:
+- Predict noise (or mean)
+- Compute $x_(t-1)$ (one denoising step)
+
+Result: $x_0$ looks like data.  
+Model predicts the noise component; repeated updates move noisy → clean.
+
+== Latent diffusion and popular systems
 
 === Latent Diffusion Models (LDM)
-*Key idea:* Run diffusion in latent space instead of pixel space:
+Run diffusion in *latent space* instead of pixels:
 - Autoencoder encodes image → latent
-- Diffusion operates on latent (cheaper)
+- Diffusion denoises latent (cheaper)
 - Decoder reconstructs final image
 
-=== Stable Diffusion (Key Points)
+=== Stable Diffusion (key points)
 - Released Aug 2022 (public weights via Hugging Face)
-- Denoising U-Net lighter because operates in latent space
-- Autoencoder handles encoding/decoding "heavy lifting"
-- Can be guided by text prompt via text encoder (v1 used CLIP; later versions use OpenCLIP)
+- Denoising U-Net is lighter (latent space)
+- Autoencoder does encoding/decoding “heavy lifting”
+- Text guidance via text encoder (v1 used CLIP; later versions use OpenCLIP)
 
-=== Imagen (Pipeline Idea)
+=== Imagen (pipeline idea)
 - Frozen text encoder: T5-XXL
-- Text-to-image diffusion model (U-Net conditioned on text embeddings)
-- Super-resolution diffusion upsamplers: 64×64 → 256×256 → 1024×1024 (still conditioned on text)
+- Text-to-image diffusion (U-Net conditioned on text embeddings)
+- Super-resolution diffusion upsamplers: 64x64 -> 256x256 -> 1024x1024 (still text-conditioned)
 
-= Multi-Modality (DALL·E, Flamingo)
+== Diffusion vs AE/VAE (why not the same)
+- AE: bottleneck may lose detail; not timestep/noise-level conditioned
+- VAE: KL regularization often yields blurrier reconstructions
+- Diffusion: explicitly trains a *time-conditioned denoiser* across noise scales
 
-Train Generative Models to convert between two or more different kinds of data (e.g., text ↔ image, text ↔ video). Requires learning shared representation to bridge modalities.
+*One-line takeaway:* add Gaussian noise until $x_T ~ cal(N)(0, I)$, then learn a time-conditioned network to reverse it.
+
+= Multi-Modality (DALL·E 2, Flamingo)
 
 == DALL·E 2
+Pipeline:
+1. Text encoder: text → text embedding (CLIP text encoder)
+2. Prior: text embedding → image embedding
+   - Autoregressive prior: sequential generation (teacher forcing vs CLIP image embedding)
+   - Diffusion prior: denoise in embedding space conditioned on text; loss = average MSE across steps
+3. Decoder: generate image conditioned on text + predicted image embedding
+   - Diffusion upsamplers: 64x64 → 256x256 → 1024x1024
 
-=== Architecture
-1. *Encoder:* text → text embedding vector
-   - Needs discrete text
-   - Uses CLIP as text encoder
+*Image variations:* CLIP image encoder → image embedding → decode variations.
 
-2. *Prior:* text embedding vector → image embedding vector
-   - Two options: autoregressive model or diffusion model
-   - Diffusion outperformed autoregressive model
-   
-   *Autoregressive Prior:*
-   - Generates output sequentially, placing ordering on output tokens
-   - Output of encoder fed to decoder, alongside current generated output image embedding
-   - Output generated one element at a time, using teacher forcing to compare predicted next element to actual CLIP image embedding
-   
-   *Diffusion Prior:*
-   - Diffusion process in embedded space
-   - Noise image embedding → random noise
-   - Learn to denoise step-by-step, conditioned on text embedding
-   - Loss: average MSE across denoising steps
+*Limitations:*
+- Attribute binding issues
+- Confusion in relations (“red cube on blue cube” vs swapped)
+- Weak precise spatial reasoning
+- Poor text rendering (embeddings capture semantics, not exact spelling/characters)
 
-3. *Decoder:* generates image
-   - Based on text prompt and predicted image embedding by prior
-   - Final part of decoder is Upsampler (2 separate diffusion models)
-   - First DF transforms image from 64×64 to 256×256
-   - Second transforms from 256×256 to 1024×1024
+== Flamingo (Vision-Language Model)
+Handles interleaved text + images/video.
 
-=== Image Variations
-- Compute CLIP image embedding for input image using CLIP image encoder
-- Feed that embedding into decoder → generate variations
+*Core components:*
+- Frozen vision encoder
+- Perceiver Resampler
+- Language model
 
-=== Limitations
-- *Attribute binding limitation:* Model struggles to correctly associate attributes (e.g., color, position) with correct objects
-- Confusion in relational prompts (e.g., "red cube on blue cube" vs "blue cube on red cube")
-- Limited understanding of precise spatial relationships
-- *Poor text rendering in images*
-  - Reason: CLIP embeddings encode high-level semantics, not exact spelling or character-level details
+*Video handling (common recipe):*
+- Sample video at ~1 fps
+- Encode each frame → feature grids
+- Add learned temporal encodings; flatten + concatenate
 
-== Flamingo (Vision Language Model)
-VLM that can handle interleaved text + visual inputs (images + video frames).
-
-=== Core Components (3)
-- *Vision encoder* (frozen)
-- *Perceiver Resampler*
-- *Language model*
-
-=== Video Handling (Slides' Recipe)
-- Sample video at 1 frame/sec
-- Run each frame through vision encoder → feature grids
-- Add learned temporal encodings, flatten, concatenate
-
-=== Perceiver Resampler (Why + How)
-*Problem:* Images produce many spatial tokens (e.g., 14×14×1024) → too expensive for LM
-
-*Solution:* Compress to fixed-size smaller set of visual tokens:
-- Learn latent queries (few) that attend over all image tokens
-- Cross-attention form: $Z = "softmax"(Q K^T) V$
-  - Q = latent queries (small count)
-  - K,V = image tokens
-- Output: compact visual embeddings usable by language model
+*Perceiver Resampler (why/how):*
+- Problem: too many image tokens (e.g., 14x14x1024) for LM
+- Solution: compress to fixed small set via cross-attention with latent queries:
+  $ Z = "softmax"(Q K^T) V $
+  where $Q$ = few learned latent queries, $K,V$ = image tokens → compact visual tokens for LM.

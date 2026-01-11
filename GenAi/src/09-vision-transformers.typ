@@ -1,25 +1,33 @@
+#import "../../template_zusammenf.typ": *
+
 = Vision Transformers (ViT)
 
 == Why ViT?
-- Transformers successful in NLP → tried in images
-- Naive self-attention would require each pixel to attend to every other pixel → quadratic costs
-- *Fix:* create small patches of image and treat them as tokens
+- Transformers were highly successful in NLP → applied to vision.
+- Naive self-attention over *pixels* is expensive:
+  - sequence length would be $H times W$ (pixels)
+  - attention cost scales ~ $O(n^2)$ in sequence length
+- *Fix:* split image into *patches* and treat each patch as one token.
 
-== ViT Architecture
-- Split img into patches with feature extractor
-- Build vocabulary of image patches with feature extractor
-- Patches are input of transformer encoder-only model
-- Model embeds input → produces raw logits that convert into final probabilities
+== ViT Architecture (Encoder-only)
+- Split image into non-overlapping patches of size $P times P$.
+- Flatten each patch and map it to a token embedding using a linear projection.
+- Add positional encoding (usually learned in ViT) so the model knows patch order.
+- Feed the token sequence into a Transformer *encoder*.
+- Classification: use a pooled representation (often a special class token) → linear head → logits → probabilities.
 
 === Patches Math
-Image split into n patches with feature extractor. Patches of equal dimensions represent words of sequence.
+Input image: $X in RR^(H times W times C) $
 
-Input image: $X in RR^(H times W times C)$\
-Sequence of patches: $X_p in RR^(N times (P^2 times C))$\
-Patch size: $P times P$\
-Number of patches: $N = (H times W) / P^2$ (effective sequence length)
+Flattened patches:
+- Patch size: $P times P$
+- $"#patches"$: $N = (H times W) / P^2 $
+- Patch matrix: $X_p in RR^(N times (P^2 times C)) $
 
-=== Training ViT / ViT Flavors
+Token embeddings: $Z_0 = X_p W + b $
+where $W in RR^((P^2 times C) times D)$ and $D$ is hidden dim.
+
+=== ViT Flavors (Common Configurations)
 #table(
   columns: (1fr, 1fr, 1fr, 1fr, 1fr, 1fr),
   table.header([*Model*], [*Layers*], [*Hidden D*], [*MLP*], [*Heads*], [*Params*]),
@@ -29,79 +37,89 @@ Number of patches: $N = (H times W) / P^2$ (effective sequence length)
 )
 
 === ViT Advantages
-- Inherits scaling capabilities of original Transformer model
-- Can capture long-term dependencies better than CNN-only architectures
-- Learn relationship between all patches in self-attention layers → more accurate predictions
+- Scales well with model/data size (Transformer-style scaling).
+- Self-attention can capture *global* relationships between distant patches.
+- Strong performance with large-scale pretraining + transfer learning.
 
 == ViT vs CNNs
 
 === Locality
 *CNNs:*
-- Assume nearby parts in image are related
-- Receptive Fields (RF) → size of region which defines feature
+- Strong locality inductive bias: nearby pixels/features are assumed related.
+- Receptive field grows with depth; features built hierarchically.
 
 *ViT:*
-- No assumption → RF is global
-- Can see mean attention distance vs. depth
-- Highly localized attention less pronounced in hybrid models that apply ResNet before Transformer
+- No explicit locality bias: attention can connect any patch to any other patch immediately.
+- With limited data, ViTs often need pretraining or hybrid designs to compete.
 
 === Translational Invariance
 *CNNs:*
-- Assume moved shape is same shape
-- Invariance: can recognize entity in image, even when appearance or position varies
-- Translation: each image pixel moved fixed amount in particular direction
+- Built-in translation equivariance/invariance (convolutions + pooling).
+- Often generalize well with smaller datasets.
 
 *ViT:*
-- No such assumption
-- Needs large training dataset to compensate
+- No built-in translation invariance.
+- Typically needs more data / augmentation / pretraining to learn these invariances.
 
 === When to Use ViT vs CNN
-*Limited data → CNNs:* Strong inductive biases (locality, translation invariance) enable good generalization with small datasets. ViTs require large labeled datasets.
+*Limited data -> CNNs:*
+- Inductive biases help generalization on small datasets.
 
-*Real-time / low-latency → CNNs:* Lower inference latency and higher computational efficiency, especially on mobile and edge devices.
+*Real-time / low-latency -> CNNs:*
+- Often faster and more compute-efficient on edge/mobile.
 
-*Limited compute budget → CNNs:* Fewer parameters, lower memory usage, cheaper training or fine-tuning.
+*Limited compute budget -> CNNs:*
+- Typically fewer parameters / cheaper training (depending on setup).
 
-*Long-range spatial dependencies → ViTs:* Self-attention captures global relationships between image patches.
+*Long-range spatial dependencies -> ViTs:*
+- Global self-attention connects distant regions naturally.
 
-*Pretrained models & transfer learning → ViTs:* Benefit strongly from large-scale pretraining and transfer learning.
+*Large-scale pretraining + transfer -> ViTs:*
+- ViTs benefit strongly from large pretraining and can transfer well.
 
 === Mean Attention Distance (Definition)
-For single query pixel q:
-1. Consider all key pixels $k_i$ in patch
-2. Compute spatial distance between q and each $k_i$ (e.g., Euclidean). Call it $d_i$
-3. Multiply each distance by attention weight $a_i$ that q assigns to $k_i$
-4. Weighted distance for q: $sum_i a_i dot d_i$
-5. Average across all queries in patch or image
-6. Average across multiple images (e.g., 128 images) to get mean attention distance for layer
+For a single query patch/token $q$ in one attention head:
+1. Consider all key tokens $k_i$.
+2. Compute spatial distance $d_i$ between $q$ and each $k_i$ (e.g., Euclidean in image coordinates).
+3. Weight distances by attention weights $a_i$:
+   $ d(q) = sum_i a_i dot d_i $
+4. Average $d(q)$ across all queries and examples → mean attention distance for that layer.
+Interpretation: larger values indicate more global attention.
 
-== Multi-Modal Transformers (CLIP)
-Train on many image-text pairs; map both modalities into shared embedding space.
+= Multi-Modal Transformers (CLIP)
 
-- Feature extractor like ViT produces image tokens
-- Text is also input token
-- Attention layer learns relationships between image and text tokens with cross attention
-- Output is raw logits
+CLIP learns a shared embedding space for images and text using many image-text pairs.
 
-=== Contrastive Learning
-Encode inputs (e.g., image and text) into vectors:
-1. Compute similarity (cosine similarity or dot product) between all pairs in batch
-2. Apply contrastive loss (e.g., InfoNCE) that:
-   - Maximizes similarity for matching pairs
-   - Minimizes similarity for non-matching pairs
+== Core Idea (Correct)
+- Use *two separate encoders*:
+  - image encoder (often ViT or CNN) -> image embedding $v_i$
+  - text encoder (Transformer) -> text embedding $w_i$
+- Train with a *contrastive objective* so matched pairs are close and mismatched pairs are far.
+#hinweis[
+Classic CLIP does *not* fuse image+text tokens via cross-attention.
+Cross-attention fusion is typical in models like Flamingo/LLaVA-style systems, not standard CLIP.
+]
 
-$ -1/N sum_i ln (e^(v_i dot w_i \/ T)) / (sum_j e^(v_i dot w_j \/ T)) - 1/N sum_j ln (e^(v_j dot w_j \/ T)) / (sum_i e^(v_i dot w_j \/ T)) $
+== Contrastive Learning (CLIP-style)
+For a batch of $N$ pairs:
+- Normalize embeddings (often): $tilde(v)_i = v_i / norm(v_i) $, $tilde(w)_j = w_j / norm(w_j) $
+- Similarity logits (with temperature $T$): $s_(i,j) = (tilde(v)_i dot tilde(w)_j) / T $
 
-For $v_i$, take dot product with all targets $w_i$ to get similarities. Apply softmax over similarities. Compute cross-entropy loss treating correct match $w_i$ as true class.
+Symmetric loss (row + column classification):
+- Image->Text: $L_"i2t" = - frac(1, N) sum_(i=1)^N log frac(exp(s_(i,i)), sum_(j=1)^N exp(s_(i,j))) $
+- Text->Image: $L_"t2i" = - frac(1, N) sum_(i=1)^N log frac(exp(s_(i,i)), sum_(j=1)^N exp(s_(j,i))) $
+Total: $L = frac(1, 2) (L_"i2t" + L_"t2i") $
 
-*Intuition:* $v_i$ should assign most probability to its positive pair $w_i$.
+*Intuition:* each image should assign highest probability to its matching text (and vice versa).
 
-=== SigLip (Sigmoid Loss for Language Image Pre-Training)
-Instead of softmax + cross-entropy over all negative pairs in batch, SigLIP uses binary classification (sigmoid) for each pair.
+== SigLIP (Sigmoid Loss for Language–Image Pre-Training)
+Instead of a softmax over the whole batch, SigLIP treats each pair as binary (match vs non-match):
+- For each pair $(i,j)$:
+  - label $y_(i,j)=1$ if $i=j$ else $0$
+  - predict using $sigma(s_(i,j))$
+- No global normalization across batch required.
 
-- For each image-text pair $(v_i, w_j)$ compute dot product and apply sigmoid to classify positive (i=j) or negative (i≠j)
-- No global normalization across batch required
-
-=== Zero-Shot Classification with CLIP
-- Turn labels into text prompts (e.g., "a photo of a [label]")
-- Encode image and all label texts; choose label with max cosine similarity
+== Zero-Shot Classification with CLIP
+- Turn class labels into prompts (e.g., `"a photo of a [label]"`).
+- Encode image and all prompt texts.
+- Choose the label with maximum cosine similarity (or dot product) to the image embedding.

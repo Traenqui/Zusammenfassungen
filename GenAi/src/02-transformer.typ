@@ -2,37 +2,34 @@
 
 = Transformers
 
-A _transformer_ uses attention mechanisms to process sequences in parallel, unlike RNNs which process sequentially.
+A _transformer_ uses attention to process sequences in parallel (unlike RNNs which are sequential).
 
 == Why Not Increase N (in N-grams)?
-- Scaling N explodes context space: counts blow up; neural inputs and params grow and overfit
-- Data needed grows fast: more context → more examples needed
-- Fixed window inflexible: long sparse dependencies are common; fixed windows waste capacity
-- *Attention solves it:* dynamically focuses on relevant tokens, better efficiency and flexibility
+- Context space explodes: larger $n$ ⇒ many more possible $n$-grams (data sparsity) → overfitting
+- Data needed grows quickly: long contexts require far more examples to estimate reliably
+- Fixed window is inflexible: long-range dependencies exist; fixed windows waste capacity
+- *Attention solves it:* dynamically focuses on relevant tokens anywhere in the context
 
 == Flavors of Transformers
-- _Encoder-Only_ (e.g., BERT): Good for understanding tasks like classification, QA (Embedding Models)
-- _Decoder-Only_ (e.g., GPT): Good for generation tasks (Causal LM / autoregressive)
-- _Encoder-Decoder_ (e.g., T5): Good for seq2seq tasks like translation
+- _Encoder-only_ (e.g., BERT): understanding tasks (classification, retrieval/embeddings, QA)
+- _Decoder-only_ (e.g., GPT): generation (causal LM / autoregressive)
+- _Encoder–decoder_ (e.g., T5): seq2seq (translation, summarization)
 
-== Inputs: Tokens, Embeddings, Positional Encoding
+== Tokens, Embeddings, Positional Encoding
+- Tokens $t_1, ..., t_n$ (from a tokenizer) → token embeddings
+- Token embedding matrix: $E in RR^(|V| times d_"model")$
+- Positional encodings add order info:
 
-_Tokenization_: Text split into tokens #hinweis[(subwords)], mapped to integer IDs\
-_Embedding_: Matrix $E$ maps token IDs to vectors in $d_"model"$ dimensions\
-_Positional Encoding_: Explicit position information added to embeddings
+$ p_i = cases(sin("pos" / 10000^((2k) / d_"model")) "if pos is even", cos("pos" / 10000^((2k) / d_"model")) "else") $
+- Input vectors: $x_i = E[t_i] + p_i$
+  - $p_i$ is positional information (either *fixed* sinusoidal or *learned* position embeddings)
 
-Transformers are order-invariant, so positional information is added:
-$ x_i = "TokenEmbedding"_i + "PositionalEmbedding"_i $
+#hinweis[
+If positional encodings are *fixed* (sin/cos), they add *0 trainable parameters*.
+If they are *learned*, they add $n_"max" times d_"model"$ parameters.
+]
 
-Positions encoded using sine and cosine functions:
-$ "PE"("pos", 2k) = sin("pos" / 10000^((2k) / d_"model")), "PE"("pos", 2k + 1) = cos("pos" / 10000^((2k) / d_"model")) $
-
-Low frequencies encode coarse position, high frequencies encode fine-grained position. These embeddings are fixed (not learned).
-
-Final input vectors: $X = "Embedding"("tokens") + "PE"$ with $X in RR^("seq_len" times d_"model")$
-
-== Self-Attention
-
+== Self-Attention (Scaled Dot-Product)
 The position-aware embedding $x_i$ is projected into (Query, Key, Value):
 
 _Q_ (*queries*): $Q = X W_Q$ "What am I looking for?"\
@@ -45,49 +42,31 @@ $ "Attention"(Q, K, V) = "softmax"((Q K^T) / sqrt(d_k)) dot V $
 
 Here $Q K^T in RR^(n times n)$ are similarity scores; dividing by $sqrt(d_k)$ stabilizes training; each row of softmax sums to 1.
 
-*Masking:* Prevents attention to certain positions (e.g., padding tokens or future tokens in autoregressive decoding).
+Typical choice: $d_k = d_"model" / h$.
 
-== Multi-Head Attention
+== Feed-Forward Network (FFN)
+A position-wise neural
+network applied independently to each token, adding non-linearity and expressive power afterattention.
+Applied independently per token:
+$ "FFN"(x) = W_2 "relu"(W_1 x + b_1) + b_2 $
 
-Multiple attention heads run in parallel, each with own $W_Q^((h)), W_K^((h)), W_V^((h))$ projections, allowing model to capture different relationships simultaneously.
+Dimensions:
+- $W_1 in RR^(d_"model" times d_"ff")$, $W_2 in RR^(d_"ff" times d_"model")$
 
-$ Y_h = "Attention"(Q_h, K_h, V_h), quad "MHA"(X) = "Concat"(Y_1, dots, Y_H) W_O $
+== Cross-Attention (Encoder–Decoder)
+Used in encoder–decoder models:
+- Decoder provides queries $Q$ (from decoder states)
+- Encoder provides keys/values $K,V$ (from encoder outputs)
 
-== Feed-Forward Layer (FFN)
+$ "CrossAttn" = "Attn"(Q_"dec", K_"enc", V_"enc") $
 
-Position-wise neural network applied independently to each token, adding non-linearity and expressive power after attention:
 
-$ "FFN"(x) = W_2 ("ReLU"(W_1 x + b_1)) + b_2 $
-
-Parameters per layer:
-$ "FFN params" = 2 times d_"model" times d_"ff" + d_"ff" + d_"model" $
-where $d_"ff"$ is typically $approx 4 d_"model"$
-
-== Layer Normalization
-
-Normalizes activations across features for each token, stabilizing training and improving convergence:
-
-$ mu = 1/d sum^d_(j=1) x_j, quad sigma^2 = 1/d sum^d_(j=1)(x_j - mu)^2 $
-$ "LN"(x) = gamma ⊙ (x - mu)/(sqrt(sigma^2 + epsilon)) + beta $
-
-Where $gamma$ and $beta$ are learnable parameters.
-
-*Batch Normalization:* Normalizes activations across the batch dimension, less suitable for Transformers due to variable sequence lengths.
-
-*Dropout:* Randomly disables neurons during training to reduce overfitting.
-
-== Cross-Attention
-
-In encoder-decoder models:
-Encoder output $H in RR^(n_"src" times d)$, decoder states $D in RR^(n_"tgt" times d)$.
-
-$ "CrossAttention"(D, H) = "Attention"(D W_Q, H W_K, H W_V) $
-
-Decoder can attend to most relevant source tokens while generating each target token.
-
-== Causal Masking
-
-Prevents seeing future tokens. Apply triangular mask so position $i$ can only attend to positions $<= i$. Scores for $j > i$ set to $-infinity$ before softmax, making attention weight $0$.
+_Causal Masking_: (Decoder-only) Masking prevents the attention mechanism from attending to certain positions, e.g. padding tokens or future tokens in autoregressive decoding.
+_Multi-Head Attention_: Multiple attention heads run in parallel, each with its own Q, K, V projections, allowing the model to capture different types of relationships simultaneously.
+_Layer Normalization_: Normalizes activations across features for each token, stabilizing training and improving convergence in deep Transformer models.
+_Batch Normalization_: Normalizes activations across the batch dimension, but is less suitable for Transformers due to variable sequence lengths. 
+_Dropout_: Randomly disables neurons during training to reduce overfitting and
+improve generalization.
 
 == Example: Transformer Parameter Count
 
@@ -101,3 +80,7 @@ Vocabulary: $|V| = 100$, model dim: $d_"model" = 32$, heads: $h = 4$ → $d_"hea
 *LayerNorm per layer:* $2 times 2 times 32 = 128$\
 *Total per layer:* $4096 + 4192 + 128 = 8416$\
 *Overall:* $2 times 8416 + 3200 + 320 = 20352$
+
+#hinweis[
+Decoder-only LMs often have an output projection to vocab (sometimes weight-tied to token embeddings). If untied, add $d_"model" times |V|$ (+ bias).
+]
